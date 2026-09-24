@@ -1,16 +1,19 @@
 #!/bin/bash
 
-#Check 1 command line arg was provided.
-if [ "$#" -ne 1 ]; then
-    echo "Usage: bash assembler.sh <file.vsc>" >&2
-    exit 1 
+if [ "$#" -eq 0 ]; then
+    echo "usage: no argument is provided"
+    exit 1
+fi
+
+if [ "$#" -gt 1 ]; then
+    echo "usage: more than one arguments are provided"
+    exit 1
 fi
 
 input_file="$1"
 
-#Check if the input file exists
-if [ ! -f "$input_file" ]; then
-    echo "Error: input file not found" >&2
+if [ -e "$input_file" ] && [ ! -f "$input_file" ]; then
+    echo "usage: input is not a file or it does not exist"
     exit 1
 fi
 
@@ -18,89 +21,103 @@ case "$input_file" in
     *.vsc)
         ;;
     *)
-        echo "Error: input file must be .vsc file" >&2
-        exit 1 
+        echo "usage: input does not have the extension .vsc"
+        exit 1
         ;;
 esac
 
+if [ ! -f "$input_file" ]; then
+    echo "usage: input is not a file or it does not exist"
+    exit 1
+fi
+
 output_file="${input_file%.vsc}.bin"
 
-to_binary() {
-    number=$1
-    bits=$2
-    binary=""
+if [ ! -s "$input_file" ]; then
+    rm -f "$output_file"
+    echo "usage: the file is empty – no .bin file is produced"
+    exit 1
+fi
 
-    for ((j=0; j<bits; j++)); do
-        binary="$((number%2))$binary"
-        number=$((number/2))
-    done
-
-    echo "$binary"
-}
 
 write_byte() {
-    byte_value=$1
-    printf "\\$(printf '%03o' "$byte_value")" >> "$output_file"
+    value=$1
+    printf "\\$(printf '%03o' "$value")" >> "$output_file"
 }
 
 
-n_values=$(sed -n '1p' "$input_file")
+# Remove CR in case the provided file uses Windows line endings
+n_values=$(sed -n '1p' "$input_file" | tr -d '\r')
 
 static_values=()
+
 for ((i=0; i<n_values; i++)); do
-    line_number=$((i+2))
-    value=$(sed -n "${line_number}p" "$input_file")
+    line_number=$((i + 2))
+    value=$(sed -n "${line_number}p" "$input_file" | tr -d '\r')
     static_values+=("$value")
 done
 
+instruction_start=$((n_values + 2))
 
-instruction_start=$((n_values +2))
 
 : > "$output_file"
-
-write_byte "$n_values"
 
 for value in "${static_values[@]}"; do
     write_byte "$value"
 done
 
 
-while IFS=',' read -r instruction register address; do
+program_type="QUIT"
+
+while IFS=',' read -r instruction register address || [ -n "$instruction" ]; do
+
+    [ -z "$instruction" ] && continue
+
     case "$instruction" in
         LOAD)
-            opcode="000001"
+            opcode=1
             ;;
         STORE)
-            opcode="000010"
+            opcode=2
             ;;
         ADD)
-            opcode="000011"
+            opcode=3
+            program_type="ADD/SUB"
             ;;
         SUB)
-            opcode="000100"
+            opcode=4
+            program_type="ADD/SUB"
             ;;
         QUIT)
-            opcode="001000"
+            opcode=8
             ;;
         PRINT)
-            opcode="001001"
+            opcode=9
             ;;
         *)
-
-            echo "Error: unknown instruction" >&2
+            echo "Error: unknown instruction"
+            rm -f "$output_file"
             exit 1
             ;;
     esac
 
-    register_binary=$(to_binary "$register" 2) #register field must be 2 bits
-    address_binary=$(to_binary "$address" 8) #address must be 8 bits
-
-    first_byte_binary="${opcode}${register_binary}"
-    first_byte=$((2#$first_byte_binary))
-    second_byte=$((2#$address_binary))
+    first_byte=$((opcode * 4 + register))
+    second_byte=$address
 
     write_byte "$first_byte"
     write_byte "$second_byte"
 
-done < <(tail -n +"$instruction_start" "$input_file")
+done < <(tail -n +"$instruction_start" "$input_file" | tr -d '\r')
 
+
+if [ "$program_type" = "QUIT" ]; then
+    echo "It is a QUIT program"
+else
+    echo "It is an ADD/SUB program"
+fi
+
+echo "The content of the .bin file is"
+
+od -An -tx1 -v "$output_file" | tr -s ' ' '\n' | sed '/^$/d'
+
+exit 0
